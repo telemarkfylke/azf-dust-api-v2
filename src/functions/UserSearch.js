@@ -40,33 +40,49 @@ app.http('UserSearch', {
       logger('info', ['No param "query" here...'], context)
       return httpResponse(400, 'No param "query" here...')
     }
+
     const mongoClient = await getMongoClient()
     const collection = mongoClient.db(MONGODB.DB_NAME).collection(MONGODB.USERS_COLLECTION)
 
-    // const regex = `/.*${request.query.get('query')}.*/i`
-    const regex = { $regex: request.query.get('query'), $options: 'i' }
+    /* ATLAS search edition - requires search index
+    const wildcardSearch = request.query.get('query').toLowerCase()
+    const search = {
+      $search: {
+        index: "user-wildcard-index",
+        wildcard: {
+          path: ["samAccountName", "userPrincipalName", "displayNameLowerCase"],
+          query: `*${wildcardSearch}*`
+        }
+      }
+    }
+    */
+
+    /* Does not work with regular index :(
+    const regex = { $regex: request.query.get('query').toLowerCase() } //  $options: 'i'
     const findQuery = {
       $or: [
-        { displayName: regex },
+        { displayNameLowerCase: regex },
         { samAccountName: regex },
         { userPrincipalName: regex }
         // { employeeNumber: regex } // Do we want to be able to find regex ssn??
       ]
     }
-    /*
-    const projection = {
-      _id: 1,
-      userPrincipalName: 1,
-      samAccountName: 1,
-      displayName: 1,
-      domain: 1,
-      title: 1,
-      departmentShort: 1,
-      company: 1
-    }
     */
+
+    // This works with regular index, so better performance (regex is startswith querystring)
+    const qs = request.query.get('query').toLowerCase()
+    const regex = { $regex: `^${qs}` }
+    const findQuery = {
+      $or: [
+        { displayNameLowerCase: regex },
+        { surNameLowerCase: regex },
+        { samAccountName: regex },
+        { userPrincipalName: regex }
+      ]
+    }
+
+    // const users = await collection.aggregate( [ search ] ).limit(10).sort({ displayName: 1, samAccountName: 1 }).toArray()
     const users = await collection.find(findQuery).limit(10).sort({ displayName: 1, samAccountName: 1, employeeNumber: 1 }).toArray() // add projection on just what we need
-    // const users = await collection.find(findQuery).limit(10).project(projection).sort({ displayName: 1, samAccountName: 1, employeeNumber: 1 }).toArray() // add projection on just what we need
     // Skrell away sensitive values
     maskSsnValues(users)
     return httpResponse(200, users)
